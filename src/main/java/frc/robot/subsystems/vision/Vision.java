@@ -1,143 +1,292 @@
-// Copyright (c) 2021-2026 Littleton Robotics
+// Copyright 2021-2025 FRC 6328
 // http://github.com/Mechanical-Advantage
 //
-// Use of this source code is governed by a BSD
-// license that can be found in the LICENSE file
-// at the root directory of this project.
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// version 3 as published by the Free Software Foundation or
+// available in the root directory of this project.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
 
 package frc.robot.subsystems.vision;
 
-import edu.wpi.first.apriltag.AprilTagFieldLayout;
-import edu.wpi.first.apriltag.AprilTagFields;
-import edu.wpi.first.math.Matrix;
-import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
-import edu.wpi.first.math.geometry.Pose3d;
-import edu.wpi.first.math.numbers.N1;
-import edu.wpi.first.math.numbers.N3;
-import edu.wpi.first.wpilibj.Alert;
-import edu.wpi.first.wpilibj.Alert.AlertType;
+import edu.wpi.first.math.geometry.Translation2d;
+import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
-import org.littletonrobotics.junction.AutoLogOutput;
+import java.util.Optional;
+import org.littletonrobotics.junction.Logger;
 
-/**
- * Vision subsystem placeholder for pose estimation using AprilTags.
- *
- * <p>This is a stub implementation that loads the 2026 FRC AprilTag field layout.
- *
- * <p>To integrate with PhotonVision cameras: 1. Install PhotonVision on your coprocessor 2. Update
- * this class to use PhotonVision libraries once a stable version is available 3. Configure camera
- * names and transforms in VisionConstants.java
- */
 public class Vision extends SubsystemBase {
-  // AprilTag field layout for 2026 FRC game
-  private final AprilTagFieldLayout fieldLayout;
+  private final VisionIO[] visionIOs;
+  private final VisionIOInputsAutoLogged[] inputs;
 
-  // Robot pose (placeholder)
-  private Pose2d robotPose = new Pose2d();
+  // 2026 FRC Reefscape AprilTag positions (in meters, field frame)
+  // Blue alliance targets
+  private static final Translation2d BLUE_REEF_CENTER = new Translation2d(2.24, 4.11);
+  private static final Translation2d BLUE_REEF_LEFT = new Translation2d(1.41, 5.53);
+  private static final Translation2d BLUE_REEF_RIGHT = new Translation2d(1.41, 2.69);
 
-  // Latency tracking
-  private double lastFrameTimestamp = 0.0;
-  private double latency = 0.0;
+  // Red alliance targets (mirrored across field)
+  private static final Translation2d RED_REEF_CENTER = new Translation2d(14.26, 4.11);
+  private static final Translation2d RED_REEF_LEFT = new Translation2d(15.09, 2.69);
+  private static final Translation2d RED_REEF_RIGHT = new Translation2d(15.09, 5.53);
 
-  // Alerts
-  private final Alert fieldLayoutAlert =
-      new Alert("Failed to load AprilTag field layout.", AlertType.kError);
+  private int targetAprilTagId = -1; // -1 means track any tag
 
-  /**
-   * Creates a Vision subsystem stub.
-   *
-   * <p>This loads the 2026 FRC AprilTag field layout. PhotonVision integration will be added once a
-   * stable version is available.
-   */
-  public Vision() {
-    // Load the AprilTag field layout for 2026 FRC game
-    try {
-      fieldLayout = AprilTagFields.kDefaultField.loadAprilTagLayoutField();
-      System.out.println("✓ AprilTag field layout loaded for 2026 FRC game");
-    } catch (Exception e) {
-      fieldLayoutAlert.set(true);
-      System.err.println("✗ Failed to load AprilTag field layout: " + e.getMessage());
-      throw new RuntimeException("Failed to load AprilTag field layout", e);
+  public Vision(VisionIO... visionIOs) {
+    this.visionIOs = visionIOs;
+    this.inputs = new VisionIOInputsAutoLogged[visionIOs.length];
+    for (int i = 0; i < visionIOs.length; i++) {
+      inputs[i] = new VisionIOInputsAutoLogged();
     }
   }
 
   @Override
   public void periodic() {
-    // Vision system is currently a stub - no measurements are generated
-    // This will be updated when PhotonVision integration is available
+    // Update inputs from all cameras
+    for (int i = 0; i < visionIOs.length; i++) {
+      visionIOs[i].updateInputs(inputs[i]);
+      Logger.processInputs("Vision/" + visionIOs[i].getName(), inputs[i]);
+    }
+    
+    // Log currently tracked AprilTag ID
+    Logger.recordOutput("Vision/TargetAprilTagId", targetAprilTagId);
   }
 
   /**
-   * Gets the latest estimated robot pose.
+   * Returns vision measurements for pose estimation. Should be called after odometry updates.
    *
-   * <p>Currently returns zero pose. Will be updated with actual vision measurements when
-   * PhotonVision integration is available.
-   *
-   * @return The estimated robot pose
+   * @return Array of vision measurements with pose, timestamp, and standard deviations
    */
-  @AutoLogOutput(key = "Vision/EstimatedPose")
-  public Pose2d getPose() {
-    return robotPose;
+  public VisionMeasurement[] getVisionMeasurements() {
+    int measurementCount = 0;
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget && input.numTags > 0) {
+        measurementCount++;
+      }
+    }
+
+    VisionMeasurement[] measurements = new VisionMeasurement[measurementCount];
+    int index = 0;
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget && input.numTags > 0) {
+        // Calculate standard deviations based on distance and number of tags
+        double xyStdDev = 0.01 + (0.05 * input.averageTagDistance);
+        double thetaStdDev = 0.01 + (0.1 * input.averageTagDistance);
+
+        // More tags = more confidence, reduce standard deviation
+        if (input.numTags > 1) {
+          xyStdDev /= Math.sqrt(input.numTags);
+          thetaStdDev /= Math.sqrt(input.numTags);
+        }
+
+        measurements[index] =
+            new VisionMeasurement(input.robotPose, input.timestamp, xyStdDev, thetaStdDev);
+        index++;
+      }
+    }
+
+    return measurements;
+  }
+
+  /** Returns the current robot pose from the best available camera */
+  public Pose2d getRobotPose() {
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget) {
+        return input.robotPose;
+      }
+    }
+    return new Pose2d();
+  }
+
+  /** Returns whether any camera has a valid target */
+  public boolean hasTarget() {
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
-   * Gets the latest estimated robot pose in 3D.
-   *
-   * @return The estimated robot pose in 3D
+   * Sets the target AprilTag ID to track. 
+   * Set to -1 to track any visible tag.
+   * 
+   * @param tagId The AprilTag ID to track, or -1 for any tag
    */
-  public Pose3d getPose3d() {
-    return new Pose3d(robotPose);
+  public void setTargetAprilTagId(int tagId) {
+    targetAprilTagId = tagId;
   }
 
   /**
-   * Gets the timestamp of the last vision measurement.
-   *
-   * @return The timestamp in seconds
+   * Gets the currently tracked AprilTag ID.
+   * 
+   * @return The target AprilTag ID, or -1 if tracking any tag
    */
-  @AutoLogOutput(key = "Vision/LastMeasurementTimestamp")
-  public double getLastMeasurementTimestamp() {
-    return lastFrameTimestamp;
+  public int getTargetAprilTagId() {
+    return targetAprilTagId;
   }
 
   /**
-   * Gets the latency of the vision measurement.
-   *
-   * @return The latency in seconds
+   * Returns whether the specified AprilTag is currently visible.
+   * 
+   * @param tagId The AprilTag ID to check
+   * @return True if the tag is visible in any camera
    */
-  @AutoLogOutput(key = "Vision/MeasurementLatency")
-  public double getLatency() {
-    return latency;
+  public boolean isTagVisible(int tagId) {
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget && input.targetId == tagId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
-   * Gets the vision measurement standard deviations for the drive pose estimator.
-   *
-   * @param distance Distance from the robot to the target tag
-   * @return Standard deviations as a matrix
+   * Returns whether the currently set target AprilTag is visible.
+   * 
+   * @return True if the target tag is visible, or if tracking any tag and any tag is visible
    */
-  public Matrix<N3, N1> getVisionMeasurementStdDevs(double distance) {
-    // Increase standard deviations as distance increases
-    double xyStdDev = 0.1 + (distance * 0.05);
-    double thetaStdDev = 0.5 + (distance * 0.1);
-    return VecBuilder.fill(xyStdDev, xyStdDev, thetaStdDev);
+  public boolean isTargetVisible() {
+    if (targetAprilTagId == -1) {
+      return hasTarget();
+    }
+    return isTagVisible(targetAprilTagId);
   }
 
   /**
-   * Gets the approximate measurement standard deviations for general use.
-   *
-   * @return Standard deviations as a matrix
+   * Gets the distance to the currently tracked AprilTag.
+   * 
+   * @return Distance in meters, or 0.0 if tag not visible
    */
-  public Matrix<N3, N1> getDefaultVisionMeasurementStdDevs() {
-    return VecBuilder.fill(0.7, 0.7, 9999999);
+  public double getDistanceToTarget() {
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget) {
+        // If tracking specific tag, only return distance if it matches
+        if (targetAprilTagId == -1 || input.targetId == targetAprilTagId) {
+          return input.targetDistance;
+        }
+      }
+    }
+    return 0.0;
   }
 
   /**
-   * Gets the field layout for reference.
-   *
-   * @return The AprilTag field layout
+   * Gets the horizontal offset (tx) to the currently tracked AprilTag.
+   * 
+   * @return Horizontal offset in degrees, or 0.0 if tag not visible
    */
-  public AprilTagFieldLayout getFieldLayout() {
-    return fieldLayout;
+  public double getTargetTx() {
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget) {
+        if (targetAprilTagId == -1 || input.targetId == targetAprilTagId) {
+          return input.tx;
+        }
+      }
+    }
+    return 0.0;
+  }
+
+  /**
+   * Gets the vertical offset (ty) to the currently tracked AprilTag.
+   * 
+   * @return Vertical offset in degrees, or 0.0 if tag not visible
+   */
+  public double getTargetTy() {
+    for (VisionIOInputsAutoLogged input : inputs) {
+      if (input.hasTarget) {
+        if (targetAprilTagId == -1 || input.targetId == targetAprilTagId) {
+          return input.ty;
+        }
+      }
+    }
+    return 0.0;
+  }
+
+  /**
+   * Returns distance to the reef center scoring position based on alliance.
+   * Updates every robot loop after odometry is updated.
+   */
+  public double distanceToReefCenter(Pose2d robotPose) {
+    Translation2d target = getReefCenter();
+    return robotPose.getTranslation().getDistance(target);
+  }
+
+  /**
+   * Returns distance to the left reef scoring zone based on alliance.
+   * Updates every robot loop after odometry is updated.
+   */
+  public double distanceToReefLeft(Pose2d robotPose) {
+    Translation2d target = getReefLeft();
+    return robotPose.getTranslation().getDistance(target);
+  }
+
+  /**
+   * Returns distance to the right reef scoring zone based on alliance.
+   * Updates every robot loop after odometry is updated.
+   */
+  public double distanceToReefRight(Pose2d robotPose) {
+    Translation2d target = getReefRight();
+    return robotPose.getTranslation().getDistance(target);
+  }
+
+  /** Returns the reef center position in field frame based on current alliance */
+  public Translation2d getReefCenter() {
+    Optional<Alliance> alliance = DriverStation.getAlliance();
+    if (alliance.isPresent()) {
+      if (alliance.get() == Alliance.Red) {
+        return RED_REEF_CENTER;
+      } else {
+        return BLUE_REEF_CENTER;
+      }
+    }
+    return BLUE_REEF_CENTER; // Default to blue
+  }
+
+  /** Returns the left reef position in field frame based on current alliance */
+  public Translation2d getReefLeft() {
+    Optional<Alliance> alliance = DriverStation.getAlliance();
+    if (alliance.isPresent()) {
+      if (alliance.get() == Alliance.Red) {
+        return RED_REEF_LEFT;
+      } else {
+        return BLUE_REEF_LEFT;
+      }
+    }
+    return BLUE_REEF_LEFT; // Default to blue
+  }
+
+  /** Returns the right reef position in field frame based on current alliance */
+  public Translation2d getReefRight() {
+    Optional<Alliance> alliance = DriverStation.getAlliance();
+    if (alliance.isPresent()) {
+      if (alliance.get() == Alliance.Red) {
+        return RED_REEF_RIGHT;
+      } else {
+        return BLUE_REEF_RIGHT;
+      }
+    }
+    return BLUE_REEF_RIGHT; // Default to blue
+  }
+
+  /** Vision measurement container class */
+  public static class VisionMeasurement {
+    public final Pose2d pose;
+    public final double timestamp;
+    public final double xyStdDev;
+    public final double thetaStdDev;
+
+    public VisionMeasurement(Pose2d pose, double timestamp, double xyStdDev, double thetaStdDev) {
+      this.pose = pose;
+      this.timestamp = timestamp;
+      this.xyStdDev = xyStdDev;
+      this.thetaStdDev = thetaStdDev;
+    }
   }
 }
