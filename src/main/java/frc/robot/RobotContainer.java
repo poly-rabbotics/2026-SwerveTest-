@@ -14,8 +14,12 @@
 package frc.robot;
 
 import com.pathplanner.lib.auto.AutoBuilder;
+import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Rotation3d;
+import edu.wpi.first.math.geometry.Transform3d;
+import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.wpilibj.GenericHID;
 import edu.wpi.first.wpilibj.XboxController;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -30,6 +34,10 @@ import frc.robot.subsystems.drive.GyroIOPigeon2;
 import frc.robot.subsystems.drive.ModuleIO;
 import frc.robot.subsystems.drive.ModuleIOSim;
 import frc.robot.subsystems.drive.ModuleIOTalonFX;
+import frc.robot.subsystems.vision.Vision;
+import frc.robot.subsystems.vision.VisionIO;
+import frc.robot.subsystems.vision.VisionIOPhotonVision;
+import org.littletonrobotics.junction.Logger;
 import org.littletonrobotics.junction.networktables.LoggedDashboardChooser;
 
 /**
@@ -41,6 +49,7 @@ import org.littletonrobotics.junction.networktables.LoggedDashboardChooser;
 public class RobotContainer {
   // Subsystems
   private final Drive drive;
+  private final Vision vision;
 
   // Controller
   private final CommandXboxController controller = new CommandXboxController(0);
@@ -60,6 +69,15 @@ public class RobotContainer {
                 new ModuleIOTalonFX(TunerConstants.FrontRight),
                 new ModuleIOTalonFX(TunerConstants.BackLeft),
                 new ModuleIOTalonFX(TunerConstants.BackRight));
+        
+        // Configure vision with PhotonVision camera
+        // TODO: Update camera name and position to match your robot
+        vision = new Vision(
+            new VisionIOPhotonVision(
+                "Camera_Module_v1", // Replace with your camera name in PhotonVision
+                new Transform3d(
+                    new Translation3d(0.3, 0.0, 0.5), // Camera position: X forward, Y left, Z up (meters)
+                    new Rotation3d(0, Math.toRadians(-20), 0)))); // Camera angle: Roll, Pitch (tilted down 20°), Yaw
         break;
 
       case SIM:
@@ -71,6 +89,7 @@ public class RobotContainer {
                 new ModuleIOSim(TunerConstants.FrontRight),
                 new ModuleIOSim(TunerConstants.BackLeft),
                 new ModuleIOSim(TunerConstants.BackRight));
+        vision = new Vision(new VisionIO() {});
         break;
 
       default:
@@ -82,6 +101,7 @@ public class RobotContainer {
                 new ModuleIO() {},
                 new ModuleIO() {},
                 new ModuleIO() {});
+        vision = new Vision(new VisionIO() {});
         break;
     }
 
@@ -115,13 +135,13 @@ public class RobotContainer {
    * edu.wpi.first.wpilibj2.command.button.JoystickButton}.
    */
   private void configureButtonBindings() {
-    // Default command, normal field-relative drive
+    // Default command, robot-oriented drive
     drive.setDefaultCommand(
         DriveCommands.joystickDrive(
             drive,
-            () -> -controller.getLeftY(),
-            () -> -controller.getLeftX(),
-            () -> -controller.getRightX()));
+            () -> -controller.getLeftY(),    // Forward/backward
+            () -> -controller.getLeftX(),    // Strafe left/right
+            () -> -controller.getRightX())); // Rotate
 
     // Lock to 0° when A button is held
     controller
@@ -136,7 +156,7 @@ public class RobotContainer {
     // Switch to X pattern when X button is pressed
     controller.x().onTrue(Commands.runOnce(drive::stopWithX, drive));
 
-    // Reset gyro to 0° when B button is pressed
+    // Reset gyro to 0° when B button is pressed
     controller
         .b()
         .onTrue(
@@ -147,7 +167,6 @@ public class RobotContainer {
                     drive)
                 .ignoringDisable(true));
   }
-
   /**
    * Use this to pass the autonomous command to the main {@link Robot} class.
    *
@@ -155,5 +174,46 @@ public class RobotContainer {
    */
   public Command getAutonomousCommand() {
     return autoChooser.get();
+  }
+
+  /** Returns the drive subsystem */
+  public Drive getDrive() {
+    return drive;
+  }
+
+  /** Returns the vision subsystem */
+  public Vision getVision() {
+    return vision;
+  }
+
+  /**
+   * Updates vision measurements to the drive pose estimator.
+   * Should be called after odometry updates in robotPeriodic.
+   */
+  public void updateVisionMeasurements() {
+    var measurements = vision.getVisionMeasurements();
+    for (var measurement : measurements) {
+      drive.addVisionMeasurement(
+          measurement.pose,
+          measurement.timestamp,
+          VecBuilder.fill(measurement.xyStdDev, measurement.xyStdDev, measurement.thetaStdDev));
+    }
+
+    // Log distance to scoring zones (updates every loop)
+    Logger.recordOutput("Vision/DistanceToReefCenter", vision.distanceToReefCenter(drive.getPose()));
+    Logger.recordOutput("Vision/DistanceToReefLeft", vision.distanceToReefLeft(drive.getPose()));
+    Logger.recordOutput("Vision/DistanceToReefRight", vision.distanceToReefRight(drive.getPose()));
+    
+    // Log target-specific data
+    Logger.recordOutput("Vision/IsTargetVisible", vision.isTargetVisible());
+    Logger.recordOutput("Vision/DistanceToTarget", vision.getDistanceToTarget());
+    Logger.recordOutput("Vision/TargetTx", vision.getTargetTx());
+    Logger.recordOutput("Vision/TargetTy", vision.getTargetTy());
+    
+    // Log robot odometry (position on field)
+    Pose2d robotPose = drive.getPose();
+    Logger.recordOutput("Odometry/X", robotPose.getX());
+    Logger.recordOutput("Odometry/Y", robotPose.getY());
+    Logger.recordOutput("Odometry/Rotation", robotPose.getRotation().getDegrees());
   }
 }

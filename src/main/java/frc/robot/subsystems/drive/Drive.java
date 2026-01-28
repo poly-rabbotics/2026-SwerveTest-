@@ -223,6 +223,21 @@ public class Drive extends SubsystemBase {
    * @param speeds Speeds in meters/sec
    */
   public void runVelocity(ChassisSpeeds speeds) {
+    // Apply a velocity threshold to prevent drift from very small commands
+    double velocityThreshold = 0.01; // m/s - stop modules if below this speed
+    double totalSpeed = Math.hypot(speeds.vxMetersPerSecond, speeds.vyMetersPerSecond);
+    
+    if (totalSpeed < velocityThreshold && Math.abs(speeds.omegaRadiansPerSecond) < 0.01) {
+      // If commanded velocity is negligible, stop all modules
+      for (var module : modules) {
+        module.stop();
+      }
+      Logger.recordOutput("SwerveStates/Setpoints", new SwerveModuleState[] {});
+      Logger.recordOutput("SwerveStates/SetpointsOptimized", new SwerveModuleState[] {});
+      Logger.recordOutput("SwerveChassisSpeeds/Setpoints", new ChassisSpeeds());
+      return;
+    }
+    
     // Calculate module setpoints
     ChassisSpeeds discreteSpeeds = ChassisSpeeds.discretize(speeds, 0.02);
     SwerveModuleState[] setpointStates = kinematics.toSwerveModuleStates(discreteSpeeds);

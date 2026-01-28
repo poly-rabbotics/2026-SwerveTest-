@@ -83,9 +83,15 @@ public class Module {
     state.optimize(getAngle());
     state.cosineScale(inputs.turnPosition);
 
-    // Apply setpoints
+    // Apply velocity setpoint
     io.setDriveVelocity(state.speedMetersPerSecond / constants.WheelRadius);
-    io.setTurnPosition(state.angle);
+    
+    // Only command turn position if there's significant velocity
+    // This prevents wheels from turning when robot should be stationary
+    if (Math.abs(state.speedMetersPerSecond) > 0.01) {
+      io.setTurnPosition(state.angle);
+    }
+    // If speed is near zero, don't command turn position (let wheel stay where it is)
   }
 
   /** Runs the module with the specified output while controlling to zero degrees. */
