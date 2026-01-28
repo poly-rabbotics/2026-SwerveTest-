@@ -3,6 +3,7 @@
 package frc.robot.subsystems.vision;
 
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Transform3d;
 import java.util.Optional;
@@ -32,7 +33,7 @@ public class VisionIOPhotonVision implements VisionIO {
     
     try {
       
-      fieldLayout = AprilTagFieldLayout.loadFromResource("/edu/wpi/first/apriltag/2026-rebuilt.json");
+      fieldLayout = AprilTagFieldLayout.loadField(AprilTagFields.kDefaultField);
     } catch (Exception e) {
       System.err.println("Failed to load 2026 Rebuilt AprilTag field layout!");
       e.printStackTrace();
