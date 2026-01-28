@@ -13,10 +13,11 @@
 
 package frc.robot.subsystems.vision;
 
+import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.apriltag.AprilTagFields;
 import edu.wpi.first.math.geometry.Pose2d;
+import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Translation2d;
-import edu.wpi.first.wpilibj.DriverStation;
-import edu.wpi.first.wpilibj.DriverStation.Alliance;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 import java.util.Optional;
 import org.littletonrobotics.junction.Logger;
@@ -24,17 +25,7 @@ import org.littletonrobotics.junction.Logger;
 public class Vision extends SubsystemBase {
   private final VisionIO[] visionIOs;
   private final VisionIOInputsAutoLogged[] inputs;
-
-  // 2026 FRC Reefscape AprilTag positions (in meters, field frame)
-  // Blue alliance targets
-  private static final Translation2d BLUE_REEF_CENTER = new Translation2d(2.24, 4.11);
-  private static final Translation2d BLUE_REEF_LEFT = new Translation2d(1.41, 5.53);
-  private static final Translation2d BLUE_REEF_RIGHT = new Translation2d(1.41, 2.69);
-
-  // Red alliance targets (mirrored across field)
-  private static final Translation2d RED_REEF_CENTER = new Translation2d(14.26, 4.11);
-  private static final Translation2d RED_REEF_LEFT = new Translation2d(15.09, 2.69);
-  private static final Translation2d RED_REEF_RIGHT = new Translation2d(15.09, 5.53);
+  private final AprilTagFieldLayout fieldLayout;
 
   private int targetAprilTagId = -1; // -1 means track any tag
 
@@ -43,6 +34,13 @@ public class Vision extends SubsystemBase {
     this.inputs = new VisionIOInputsAutoLogged[visionIOs.length];
     for (int i = 0; i < visionIOs.length; i++) {
       inputs[i] = new VisionIOInputsAutoLogged();
+    }
+    
+    // Load the 2026 Reefscape field layout
+    try {
+      this.fieldLayout = AprilTagFieldLayout.loadField(AprilTagFields.k2026RebuiltWelded);
+    } catch (Exception e) {
+      throw new RuntimeException("Failed to load AprilTag field layout", e);
     }
   }
 
@@ -210,69 +208,39 @@ public class Vision extends SubsystemBase {
   }
 
   /**
-   * Returns distance to the reef center scoring position based on alliance.
-   * Updates every robot loop after odometry is updated.
+   * Gets the position of an AprilTag from the field layout.
+   * 
+   * @param tagId The AprilTag ID
+   * @return Optional containing the tag's Pose3d if it exists
    */
-  public double distanceToReefCenter(Pose2d robotPose) {
-    Translation2d target = getReefCenter();
-    return robotPose.getTranslation().getDistance(target);
+  public Optional<Pose3d> getTagPose(int tagId) {
+    return fieldLayout.getTagPose(tagId);
   }
 
   /**
-   * Returns distance to the left reef scoring zone based on alliance.
-   * Updates every robot loop after odometry is updated.
+   * Gets the 2D position of an AprilTag from the field layout.
+   * 
+   * @param tagId The AprilTag ID
+   * @return Optional containing the tag's 2D position if it exists
    */
-  public double distanceToReefLeft(Pose2d robotPose) {
-    Translation2d target = getReefLeft();
-    return robotPose.getTranslation().getDistance(target);
+  public Optional<Translation2d> getTagPosition(int tagId) {
+    Optional<Pose3d> tagPose = fieldLayout.getTagPose(tagId);
+    return tagPose.map(pose -> pose.getTranslation().toTranslation2d());
   }
 
   /**
-   * Returns distance to the right reef scoring zone based on alliance.
-   * Updates every robot loop after odometry is updated.
+   * Gets the distance from the robot to a specific AprilTag.
+   * 
+   * @param robotPose The current robot pose
+   * @param tagId The AprilTag ID
+   * @return Distance in meters, or -1.0 if tag doesn't exist
    */
-  public double distanceToReefRight(Pose2d robotPose) {
-    Translation2d target = getReefRight();
-    return robotPose.getTranslation().getDistance(target);
-  }
-
-  /** Returns the reef center position in field frame based on current alliance */
-  public Translation2d getReefCenter() {
-    Optional<Alliance> alliance = DriverStation.getAlliance();
-    if (alliance.isPresent()) {
-      if (alliance.get() == Alliance.Red) {
-        return RED_REEF_CENTER;
-      } else {
-        return BLUE_REEF_CENTER;
-      }
+  public double getDistanceToTag(Pose2d robotPose, int tagId) {
+    Optional<Translation2d> tagPosition = getTagPosition(tagId);
+    if (tagPosition.isPresent()) {
+      return robotPose.getTranslation().getDistance(tagPosition.get());
     }
-    return BLUE_REEF_CENTER; // Default to blue
-  }
-
-  /** Returns the left reef position in field frame based on current alliance */
-  public Translation2d getReefLeft() {
-    Optional<Alliance> alliance = DriverStation.getAlliance();
-    if (alliance.isPresent()) {
-      if (alliance.get() == Alliance.Red) {
-        return RED_REEF_LEFT;
-      } else {
-        return BLUE_REEF_LEFT;
-      }
-    }
-    return BLUE_REEF_LEFT; // Default to blue
-  }
-
-  /** Returns the right reef position in field frame based on current alliance */
-  public Translation2d getReefRight() {
-    Optional<Alliance> alliance = DriverStation.getAlliance();
-    if (alliance.isPresent()) {
-      if (alliance.get() == Alliance.Red) {
-        return RED_REEF_RIGHT;
-      } else {
-        return BLUE_REEF_RIGHT;
-      }
-    }
-    return BLUE_REEF_RIGHT; // Default to blue
+    return -1.0;
   }
 
   /** Vision measurement container class */

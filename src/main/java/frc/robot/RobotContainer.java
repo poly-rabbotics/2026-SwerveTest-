@@ -1,3 +1,5 @@
+
+
 // Copyright 2021-2025 FRC 6328
 // http://github.com/Mechanical-Advantage
 //
@@ -199,10 +201,7 @@ public class RobotContainer {
           VecBuilder.fill(measurement.xyStdDev, measurement.xyStdDev, measurement.thetaStdDev));
     }
 
-    // Log distance to scoring zones (updates every loop)
-    Logger.recordOutput("Vision/DistanceToReefCenter", vision.distanceToReefCenter(drive.getPose()));
-    Logger.recordOutput("Vision/DistanceToReefLeft", vision.distanceToReefLeft(drive.getPose()));
-    Logger.recordOutput("Vision/DistanceToReefRight", vision.distanceToReefRight(drive.getPose()));
+    
     
     // Log target-specific data
     Logger.recordOutput("Vision/IsTargetVisible", vision.isTargetVisible());
